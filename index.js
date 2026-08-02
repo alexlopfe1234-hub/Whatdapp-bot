@@ -1,8 +1,8 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const express = require('express');
 
 // Servidor web obligatorio para la nube de Render
-const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -14,9 +14,9 @@ app.listen(PORT, () => {
     console.log(`Servidor web corriendo en el puerto ${PORT}`);
 });
 
-const grupoConfig = {}; 
-const advertencias = {}; 
-const malasPalabras = ["puta", "puto", "idiota", "perra", "estupido", "estúpido"]; 
+const grupoConfig = {};
+const advertencias = {};
+const malasPalabras = ["puta", "puto", "idiota", "perra", "estupido", "estupida"];
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -28,81 +28,84 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' })
     });
 
-    // Código de vinculación de 8 dígitos automático usando la variable de Render
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = process.env.PHONE_NUMBER; 
-        
-        if (!phoneNumber) {
-            console.log('⚠️ ADVERTENCIA: Falta configurar la variable PHONE_NUMBER en Render.');
-        } else {
-            setTimeout(async () => {
-                try {
-                    let code = await sock.requestPairingCode(phoneNumber.trim());
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
-                    console.log(`\n🔑 TU CÓDIGO DE VINCULACIÓN DE 8 DÍGITOS ES: \x1b[32m${code}\x1b[0m\n`);
-                } catch (e) {
-                    console.log('❌ Error al solicitar el código:', e);
-                }
-            }, 3000);
-        }
-    }
+    sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexión cerrada. Reconectando...', shouldReconnect);
             if (shouldReconnect) {
                 connectToWhatsApp();
             }
         } else if (connection === 'open') {
-            console.log('\n¡Bot conectado exitosamente a WhatsApp!\n');
+            console.log('¡Bot conectado exitosamente a WhatsApp!');
+        }
+
+        // Sistema de emparejamiento por código de 8 dígitos si no está conectado
+        if (!sock.authState.creds.registered) {
+            const phoneNumber = process.env.PHONE_NUMBER;
+            if (phoneNumber) {
+                setTimeout(async () => {
+                    try {
+                        const code = await sock.requestPairingCode(phoneNumber);
+                        console.log(`\n========================================`);
+                        console.log(`TU CÓDIGO DE VINCULACIÓN ES: ${code}`);
+                        console.log(`========================================\n`);
+                    } catch (error) {
+                        console.error('Error al solicitar el código de emparejamiento:', error);
+                    }
+                }, 3000);
+            }
         }
     });
 
-    sock.ev.on('creds.update', saveCreds);
-
-    // Lógica de anti-groserías
-    sock.ev.on('messages.upsert', async (m) => {
+    // Manejador de mensajes entrantes
+    sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
-            const mek = m.messages[0];
-            if (!mek.message) return;
-            
-            const remoteJid = mek.key.remoteJid;
-            const sender = mek.key.participant || remoteJid;
-            const textMessage = mek.message.conversation || mek.message.extendedTextMessage?.text || '';
-            const isAdmin = false; 
+            const m = messages[0];
+            if (!m.message || m.key.fromMe) return;
 
-            if (grupoConfig.antigroserias && !isAdmin) {
-                const textoLimpiado = textMessage.toLowerCase();
-                const contieneGroseria = malasPalabras.some(palabra => textoLimpiado.includes(palabra));
+            const remoteJid = m.key.remoteJid;
+            const sender = m.key.participant || remoteJid;
+            const text = m.message.conversation || m.message.extendedTextMessage?.text || '';
+            const textLower = text.toLowerCase();
 
-                if (contieneGroseria) {
-                    if (!advertencias[remoteJid]) advertencias[remoteJid] = {};
-                    if (!advertencias[remoteJid][sender]) advertencias[remoteJid][sender] = { count: 0, lastTime: Date.now() };
-                    
-                    const userData = advertencias[remoteJid][sender];
+            // Comando del menú
+            if (textLower === '!menu' || textLower === '.menu') {
+                await sock.sendMessage(remoteJid, { 
+                    text: '🤖 *Menú del Bot*\n\n1. !4k - Mejorar imagen\n2. !menu - Ver este menú' 
+                });
+                return;
+            }
 
-                    if (Date.now() - userData.lastTime > 2 * 24 * 60 * 60 * 1000) {
-                        userData.count = 0;
-                    }
+            // Detector de groserías
+            const contieneGroseria = malasPalabras.some(palabra => textLower.includes(palabra));
+            if (contieneGroseria) {
+                if (!advertencias[remoteJid]) advertencias[remoteJid] = {};
+                if (!advertencias[remoteJid][sender]) advertencias[remoteJid][sender] = { count: 0, lastTime: 0 };
 
-                    userData.count += 1;
-                    userData.lastTime = Date.now();
+                const userData = advertencias[remoteJid][sender];
+                if (Date.now() - userData.lastTime > 2 * 24 * 60 * 60 * 1000) {
+                    userData.count = 0;
+                }
 
-                    if (userData.count >= 4) {
-                        try {
-                            await sock.sendMessage(remoteJid, { delete: mek.key });
-                            await sock.groupParticipantsUpdate(remoteJid, [sender], "remove");
-                            await sock.sendMessage(remoteJid, { text: `❌ @${sender.split('@')[0]} expulsado por acumular 4 advertencias de groserías.`, mentions: [sender] });
-                            delete advertencias[remoteJid][sender];
-                        } catch (e) {}
-                    } else {
-                        try {
-                            await sock.sendMessage(remoteJid, { delete: mek.key });
-                            await sock.sendMessage(remoteJid, { text: `⚠️ @${sender.split('@')[0]} Advertencia (${userData.count}/4). Cuida tu vocabulario.`, mentions: [sender] });
-                        } catch (e) {}
-                    }
+                userData.count += 1;
+                userData.lastTime = Date.now();
+
+                if (userData.count >= 4) {
+                    try {
+                        await sock.sendMessage(remoteJid, { delete: m.key });
+                        await sock.groupParticipantsUpdate(remoteJid, [sender], 'remove');
+                        await sock.sendMessage(remoteJid, { text: '❌ Usuario expulsado por acumular groserías.' });
+                        delete advertencias[remoteJid][sender];
+                    } catch (e) {}
+                } else {
+                    try {
+                        await sock.sendMessage(remoteJid, { delete: m.key });
+                        await sock.sendMessage(remoteJid, { text: `⚠️ Advertencia (${userData.count}/4) por lenguaje inapropiado.` });
+                    } catch (e) {}
                 }
             }
         } catch (err) {
@@ -110,11 +113,5 @@ async function connectToWhatsApp() {
         }
     });
 }
-        if (text === '!menu' || text === '.menu') {
-            await sock.sendMessage(remoteJid, { 
-                text: '🤖 *Menú del Bot*\n\n1. !4k - Mejorar imagen\n2. !menu - Ver este menú' 
-            });
-        }
 
 connectToWhatsApp();
-
