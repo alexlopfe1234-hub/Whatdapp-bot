@@ -5,42 +5,49 @@ const {
     isJidGroup
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const qrcode = require('qrcode-terminal');
 const express = require('express');
 
-// Configuración del servidor web para Render (evita que el bot se duerma)
+// Configuración del servidor web para Render (mantiene el bot activo)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-    res.send('🤖 ¡El bot de WhatsApp está activo y funcionando correctamente!');
+    res.send('🤖 ¡El bot de WhatsApp con código de vinculación está activo!');
 });
 
 app.listen(PORT, () => {
     console.log(`Servidor web corriendo en el puerto ${PORT}`);
 });
 
-// Almacén en memoria para el antienlace por grupo
 const antienlaceState = {};
+const phoneNumber = "50232131287"; // Tu número configurado
 
 async function startBot() {
-    // Si estás en Render y usas un disco persistente, puedes apuntar a esa carpeta (ej: /opt/render/project/src/sesion_bot)
-    // De manera predeterminada usará una carpeta local 'sesion_bot'
     const { state, saveCreds } = await useMultiFileAuthState('sesion_bot');
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
-        browser: ['BotAntienlaceCloud', 'Chrome', '1.0.0']
+        printQRInTerminal: false, // Desactivamos el QR para usar el código de 8 dígitos
+        browser: ['Chrome (Linux)', 'Chrome', '120.0.0.0'] // Recomendado para evitar fallos en el pairing code
     });
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    // Solicitar el código de vinculación de 8 dígitos si no está registrado
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                // Pequeña pausa para asegurar la conexión con los servidores de WhatsApp
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log(`\n========================================`);
+                console.log(`🔑 TU CÓDIGO DE VINCULACIÓN ES: ${code?.match(/.{1,4}/g)?.join('-') || code}`);
+                console.log(`========================================\n`);
+            } catch (error) {
+                console.error('Error al solicitar el código de vinculación:', error);
+            }
+        }, 3000);
+    }
 
-        if (qr) {
-            console.log('Escanea el código QR desde la consola de Render (Número vinculado: 50232131287):');
-            qrcode.generate(qr, { small: true });
-        }
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
@@ -52,12 +59,13 @@ async function startBot() {
                 console.log('Sesión cerrada permanentemente.');
             }
         } else if (connection === 'open') {
-            console.log('¡Bot conectado exitosamente a la nube!');
+            console.log('¡Bot conectado exitosamente a la nube mediante código!');
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Sistema de mensajes (Menú y Antienlace)
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
