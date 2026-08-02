@@ -14,7 +14,6 @@ app.listen(PORT, () => {
     console.log(`Servidor web corriendo en el puerto ${PORT}`);
 });
 
-const grupoConfig = {};
 const advertencias = {};
 const malasPalabras = ["puta", "puto", "idiota", "perra", "estupido", "estupida"];
 
@@ -31,7 +30,7 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -43,7 +42,7 @@ async function connectToWhatsApp() {
             console.log('¡Bot conectado exitosamente a WhatsApp!');
         }
 
-        // Sistema de emparejamiento por código de 8 dígitos si no está conectado
+        // Sistema de emparejamiento por código de 8 dígitos
         if (!sock.authState.creds.registered) {
             const phoneNumber = process.env.PHONE_NUMBER;
             if (phoneNumber) {
@@ -71,14 +70,6 @@ async function connectToWhatsApp() {
             const sender = m.key.participant || remoteJid;
             const text = m.message.conversation || m.message.extendedTextMessage?.text || '';
             const textLower = text.toLowerCase();
-
-            // Comando del menú
-            if (textLower === '!menu' || textLower === '.menu') {
-                await sock.sendMessage(remoteJid, { 
-                    text: '🤖 *Menú del Bot*\n\n1. !4k - Mejorar imagen\n2. !menu - Ver este menú' 
-                });
-                return;
-            }
 
             // Detector de groserías
             const contieneGroseria = malasPalabras.some(palabra => textLower.includes(palabra));
@@ -115,4 +106,3 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-
