@@ -7,7 +7,6 @@ const {
 const { Boom } = require('@hapi/boom');
 const express = require('express');
 
-// Configuración del servidor web para Render (mantiene el bot activo)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -20,25 +19,25 @@ app.listen(PORT, () => {
 });
 
 const antienlaceState = {};
-const phoneNumber = "50232131287"; // Tu número configurado
+// Tomar el número directamente de la variable de entorno configurada en Render
+const phoneNumber = process.env.PHONE_NUMBER || "50232131287";
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('sesion_bot');
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // Desactivamos el QR para usar el código de 8 dígitos
-        browser: ['Chrome (Linux)', 'Chrome', '120.0.0.0'] // Recomendado para evitar fallos en el pairing code
+        printQRInTerminal: false,
+        browser: ['Chrome (Linux)', 'Chrome', '120.0.0.0']
     });
 
-    // Solicitar el código de vinculación de 8 dígitos si no está registrado
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
-                // Pequeña pausa para asegurar la conexión con los servidores de WhatsApp
                 const code = await sock.requestPairingCode(phoneNumber);
                 console.log(`\n========================================`);
-                console.log(`🔑 TU CÓDIGO DE VINCULACIÓN ES: ${code?.match(/.{1,4}/g)?.join('-') || code}`);
+                console.log(`🔑 CÓDIGO DE VINCULACIÓN PARA ${phoneNumber}:`);
+                console.log(`${code?.match(/.{1,4}/g)?.join('-') || code}`);
                 console.log(`========================================\n`);
             } catch (error) {
                 console.error('Error al solicitar el código de vinculación:', error);
@@ -65,7 +64,6 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Sistema de mensajes (Menú y Antienlace)
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
@@ -83,7 +81,6 @@ async function startBot() {
         if (!text) return;
         const sender = m.key.participant || remoteJid;
 
-        // Comando !menu
         if (text.toLowerCase() === '!menu') {
             const menuText = 
 `🤖 *MENÚ DE COMANDOS DEL BOT* 🤖
@@ -92,13 +89,12 @@ async function startBot() {
 🔹 *!antienlace on* - Activa el filtro antienlace.
 🔹 *!antienlace off* - Desactiva el filtro antienlace.
 
-_Número configurado:_ +502 3213 1287`;
+_Número configurado:_ +${phoneNumber}`;
 
             await sock.sendMessage(remoteJid, { text: menuText }, { quoted: m });
             return;
         }
 
-        // Comando !antienlace configuración
         if (isGroup && text.toLowerCase().startsWith('!antienlace')) {
             const args = text.split(' ');
             const action = args[1] ? args[1].toLowerCase() : '';
@@ -115,7 +111,6 @@ _Número configurado:_ +502 3213 1287`;
             return;
         }
 
-        // Detección y eliminación de enlaces
         if (isGroup && antienlaceState[remoteJid] === true) {
             const linkRegex = /(https?:\/\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(t\.me\/[^\s]+)/gi;
 
