@@ -110,6 +110,11 @@ async function connectToWhatsApp() {
         }
     });
 }
+        if (text === '!menu' || text === '.menu') {
+            await sock.sendMessage(remoteJid, { 
+                text: '🤖 *Menú del Bot*\n\n1. !4k - Mejorar imagen\n2. !menu - Ver este menú' 
+            });
+        }
 
 connectToWhatsApp();
 
